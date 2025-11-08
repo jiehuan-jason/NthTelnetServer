@@ -29,9 +29,11 @@ namespace NthDeveloper.TelnetServer
             public bool IsSucceed { get; set; }
             public string ResponseMessage { get; set; }
             public Dictionary<string, string> Parameters { get; set; }
+            public ITelnetCommand telnetCommand { get; set; }
+
         }
 
-        static readonly Regex TokenizerRegex = new Regex("(\"[^\"]+\")|([^ \":]+)|(:)", RegexOptions.Compiled);       
+        static readonly Regex TokenizerRegex = new Regex("(\"[^\"]+\")|([^ \"=]+)|(=)", RegexOptions.Compiled);       
 
         bool m_IsRunning;
         ITCPServer m_TCPServer;
@@ -202,9 +204,14 @@ namespace NthDeveloper.TelnetServer
 
         private void parseCommandLine(ReceivedCommandItem commandItem)
         {
-            Stack<string> commandStack = new Stack<string>();
+
+            
+
+            List<string> commandValueList = new List<string>();
+            List<string> commandNameList = new List<string>();
             Dictionary<string, string> parameters = new Dictionary<string, string>();
             Match regExMatch = TokenizerRegex.Match(commandItem.InputCommand);
+
 
             bool parameter = false;
 
@@ -213,28 +220,55 @@ namespace NthDeveloper.TelnetServer
                 string temp = regExMatch.Value.Replace("\"", "").Replace("'", "");
                 switch (temp)
                 {
-                    case ":":
+                    case "=":
                         if (parameter)
                             throw new ArgumentException("Invalid Parameters");
 
                         regExMatch = regExMatch.NextMatch();
                         if (regExMatch.Success)
-                            parameters.Add(commandStack.Pop(), regExMatch.Value.Replace("\"", "").Replace("'", ""));
+                        {
+                            parameters.Add(commandValueList.Last(), regExMatch.Value.Replace("\"", "").Replace("'", ""));
+                            commandValueList.Remove(commandValueList.Last());
+                        }
+                            
 
                         parameter = true;
                         break;
                     default:
-                        commandStack.Push(temp);
+                        commandValueList.Add(temp);
                         parameter = false;
                         break;
                 }
                 regExMatch = regExMatch.NextMatch();
             }
 
-            while (commandStack.Count > 1)
-                parameters.Add(commandStack.Pop(), null);
+            commandItem.CommandName = commandValueList.First().ToLowerInvariant();
 
-            commandItem.CommandName = commandStack.Pop().ToLowerInvariant();
+            if (!m_Commands.ContainsKey(commandItem.CommandName))
+            {
+                commandItem.IsSucceed = false;
+                commandItem.ResponseMessage = "Unknown command.";
+                return;
+            }
+
+            var _cmd = m_Commands[commandItem.CommandName];
+
+            commandItem.telnetCommand = _cmd;
+
+            foreach (var param in _cmd.Parameters)
+            {
+                commandNameList.Add(param.Name);
+            }
+
+            for (int i=1; i< commandValueList.Count; i++)
+            {
+                if(parameters.ContainsKey(commandNameList.ElementAt(i-1)))
+                    continue;
+                parameters.Add(commandNameList.ElementAt(i-1), commandValueList.ElementAt(i));
+            }
+                
+
+            
             commandItem.Parameters = parameters;
         }        
 
@@ -378,7 +412,7 @@ namespace NthDeveloper.TelnetServer
 
         private string getPromptText()
         {
-            return m_Settings.PromtText + ">";
+            return m_Settings.PromtText;
         }
 
         private void m_TCPServer_ClientConnected(ITCPServer server, ClientInfo client)
